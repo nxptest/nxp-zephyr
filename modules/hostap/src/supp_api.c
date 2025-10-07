@@ -3160,6 +3160,15 @@ static int dpp_params_to_cmd(struct wifi_dpp_params *params, char *cmd, size_t m
 			snprintf(pos, end - pos, " curve=%s",
 				 dpp_params_to_args_curve(params->bootstrap_gen.curve));
 		}
+                if (params->bootstrap_gen.key[0] != 0) {
+                    int i;
+                    snprintf(pos, end - pos, " key=");
+                    STR_CUR_TO_END(pos);
+                    for (i=0 ; i<121 ; i++) {
+                        snprintf(pos, end - pos, "%02x", params->bootstrap_gen.key[i]);
+                        STR_CUR_TO_END(pos);
+                    }
+                }
 		break;
 	case WIFI_DPP_BOOTSTRAP_GET_URI:
 		snprintf(pos, end - pos, "DPP_BOOTSTRAP_GET_URI %d", params->id);
@@ -3248,7 +3257,8 @@ int supplicant_dpp_dispatch(const struct device *dev, struct wifi_dpp_params *pa
 		os_free(cmd);
 		return ret;
 	}
-
+        // Transfer the params => wpa_cli commands & send to wpa_supplicant
+        //wpa_printf(MSG_ERROR, "wpa_cli %s", cmd);
 	wpa_printf(MSG_DEBUG, "wpa_cli %s", cmd);
 	if (zephyr_wpa_cli_cmd_resp(cmd, params->resp)) {
 		os_free(cmd);

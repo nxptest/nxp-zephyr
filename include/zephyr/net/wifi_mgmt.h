@@ -1190,6 +1190,9 @@ struct wifi_dpp_bootstrap_gen_params {
 	int curve;
 	/** Own mac address */
 	uint8_t mac[WIFI_MAC_ADDR_LEN];
+        // Set the private key ,instead of always regenerating a new one
+        /** key */
+        uint8_t key[121];
 };
 
 /** Params to set specific DPP configurator */

@@ -1,0 +1,11 @@
+mainmenu "NXP Matter AWS Wi-Fi Example Applicaion"
+
+rsource "../../../../../../../matter/config/nxp/chip-module/Kconfig.defaults"
+rsource "../../../../../../../matter/config/nxp/chip-module/Kconfig.features"
+source "Kconfig.zephyr"
+
+config BUILD_IN_DWA
+    bool "Enable DWA feature"
+    default n
+    help
+        Enable support for the DWA feature in this build

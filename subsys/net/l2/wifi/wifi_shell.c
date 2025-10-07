@@ -3870,6 +3870,120 @@ SHELL_SUBCMD_ADD((wifi), ps_exit_strategy, NULL,
 
 SHELL_CMD_REGISTER(wifi, &wifi_commands, "Wi-Fi commands", NULL);
 
+//#if defined(CONFIG_BUILD_IN_DWA) && (CONFIG_BUILD_IN_DWA == 1)
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#define DEF_DPP_OPCLASS 81
+#define DEF_DPP_CHNL 1
+#define MAX_QRCODE_BUFLEN	512
+enum {
+    DWA_QRCODE_DPP_ID,
+    DWA_QRCODE_MATTER_ID,
+    DWA_QRCODE_MAX
+};
+
+
+struct k_work_delayable my_work;
+char dwa_qrcode[DWA_QRCODE_MAX][MAX_QRCODE_BUFLEN];
+
+static void wifi_dpp_cmds(struct k_work *work)
+{
+    int dpp_id;
+    struct net_if *iface = net_if_get_wifi_sta();
+    struct net_linkaddr *link_addr;
+    struct wifi_dpp_params params = {0};
+    static uint8_t defkey[]={0x30,0x77,0x02,0x01,0x01,0x04,0x20,0x9f,
+		    0x4a,0xc2,0xab,0xe6,0xc4,0xa3,0x05,0x7d,
+		    0x0e,0x11,0x5e,0x90,0x9f,0xc7,0x21,0xbc,
+		    0xc1,0xec,0xdc,0x65,0xba,0x43,0xa2,0x72,
+		    0x75,0x88,0x7f,0x9a,0xbc,0xd9,0x33,0xa0,
+		    0x0a,0x06,0x08,0x2a,0x86,0x48,0xce,0x3d,
+		    0x03,0x01,0x07,0xa1,0x44,0x03,0x42,0x00,
+		    0x04,0x12,0xf8,0x51,0x13,0x3d,0x33,0xee,
+		    0xb6,0x18,0xac,0xb0,0xbe,0x96,0x83,0x02,
+		    0x38,0xe7,0x5f,0x89,0x9e,0x39,0xf3,0xdc,
+		    0xff,0x1c,0xc8,0x5f,0xea,0xc7,0xc6,0x00,
+		    0x17,0xc9,0xb1,0xfc,0x5b,0x90,0x88,0xd0,
+		    0x82,0x7f,0x7e,0x75,0x16,0xf2,0x8c,0x61,
+		    0xe7,0xa0,0x74,0xa7,0x12,0x72,0x0c,0x6b,
+		    0x1f,0x83,0x65,0x5a,0x57,0x11,0xf6,0xd5,
+		    0x21};
+
+    // printk("====> wifi_dpp_cmds()\n");
+    if (!iface)
+    {
+        printk("Failed to get wifi_sta \n");
+        return;
+    }
+    link_addr = net_if_get_link_addr(iface);
+    if (!link_addr || link_addr->len != 6) {
+        printk("Invalid link address\n");
+        return;
+    }
+    printk("Wi-Fi Mac Addr: %02X:%02X:%02X:%02X:%02x:%02x\n",
+        link_addr->addr[0], link_addr->addr[1], link_addr->addr[2],
+        link_addr->addr[3], link_addr->addr[4], link_addr->addr[5]);
+
+    // ================================================================
+    // wifi dpp btstrap_gen  --type 1 --opclass 81 --channel 1 --mac C0:95:DA:01:55:09
+    params.action = WIFI_DPP_BOOTSTRAP_GEN;
+    params.bootstrap_gen.type = WIFI_DPP_BOOTSTRAP_TYPE_QRCODE;
+    params.bootstrap_gen.op_class = DEF_DPP_OPCLASS;
+    params.bootstrap_gen.chan = DEF_DPP_CHNL;
+    memcpy(params.bootstrap_gen.mac, link_addr->addr, WIFI_MAC_ADDR_LEN);
+    memcpy(params.bootstrap_gen.key, defkey, sizeof(defkey));
+
+    if (net_mgmt(NET_REQUEST_WIFI_DPP, iface, &params, sizeof(params))) {
+//        PR_WARNING("Failed to request DPP action\n");
+        printk("<==== wifi_dpp_test(): Failed to request DPP action\n");
+        return;
+    }
+    sscanf(params.resp, "%d", &dpp_id);
+    //printk("====> dpp_id: %d\n", dpp_id);
+
+    // ================================================================
+    // wifi dpp btstrap_get_uri 1
+    memset(&params, 0, sizeof(params));
+    params.action = WIFI_DPP_BOOTSTRAP_GET_URI;
+    params.id = dpp_id;
+    if (net_mgmt(NET_REQUEST_WIFI_DPP, iface, &params, sizeof(params))) {
+        //    PR_WARNING("Failed to request DPP action\n");
+        printk("Failed to request WIFI_DPP_BOOTSTRAP_GET_URI action\n");
+        return ;
+    }
+    strncpy(dwa_qrcode[DWA_QRCODE_DPP_ID], params.resp, MAX_QRCODE_BUFLEN);
+    /*
+     printk("===> uri:[%s]\n", dwa_qrcode[DWA_QRCODE_DPP_ID]);
+     if (dwa_qrcode[DWA_QRCODE_MATTER_ID][0] != 0) {
+         printk("===> Matter QRCode:[%s]\n", dwa_qrcode[DWA_QRCODE_MATTER_ID]);
+    } else {
+        printk("====> No Matter QRCode \n");
+    }
+    */
+    printk("\n\n device qrcode: [%s", dwa_qrcode[DWA_QRCODE_DPP_ID]);
+    if (dwa_qrcode[DWA_QRCODE_MATTER_ID][0] != 0) {
+        printk("%s] \n", dwa_qrcode[DWA_QRCODE_MATTER_ID]);
+    } else {
+        printk("] \n");
+    }
+
+    // ================================================================
+    // wifi dpp listen -f 2412 -r 2
+    memset(&params, 0, sizeof(params));
+    params.action = WIFI_DPP_LISTEN;
+    params.listen.role = WIFI_DPP_ROLE_ENROLLEE;
+    params.listen.freq = 2412 + (DEF_DPP_CHNL - 1)*5;
+
+    if (net_mgmt(NET_REQUEST_WIFI_DPP, iface, &params, sizeof(params))) {
+        //        PR_WARNING("Failed to request DPP action\n");
+        printk("Failed to request WIFI_DPP_LISTEN action\n");
+        return ;
+    }
+
+    // printk("<==== wifi_dpp_cmds()\n");
+}
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//#endif // CONFIG_BUILD_IN_DWA
+
 static int wifi_shell_init(void)
 {
 
@@ -3888,6 +4002,12 @@ static int wifi_shell_init(void)
 				     wifi_mgmt_scan_event_handler,
 				     WIFI_SHELL_SCAN_EVENTS);
 
+//#if defined(CONFIG_BUILD_IN_DWA) && (CONFIG_BUILD_IN_DWA == 1)
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        k_work_init_delayable(&my_work, wifi_dpp_cmds);
+        k_work_schedule(&my_work, K_SECONDS(2));
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//#endif // CONFIG_BUILD_IN_DWA
 	return 0;
 }
 
