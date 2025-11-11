@@ -28,6 +28,10 @@ LOG_MODULE_REGISTER(net_wifi_shell, LOG_LEVEL_INF);
 #include <zephyr/posix/unistd.h>
 #include <zephyr/sys/slist.h>
 
+// Save settings ++
+#include <zephyr/settings/settings.h>
+// Save settings --
+
 #include "net_shell_private.h"
 #include <math.h>
 #ifdef CONFIG_WIFI_NM_WPA_SUPPLICANT_CRYPTO_ENTERPRISE
@@ -3981,6 +3985,129 @@ static void wifi_dpp_cmds(struct k_work *work)
 
     // printk("<==== wifi_dpp_cmds()\n");
 }
+
+static char ssid[WIFI_SSID_MAX_LEN+1];
+static char pwd[WIFI_PSK_MAX_LEN+1];
+static int key_mgmt;
+// Definition in hostap/src/common$ ls defs.h
+#define WPA_KEY_MGMT_PSK BIT(1)
+#define WPA_KEY_MGMT_FT_PSK BIT(6)
+#define WPA_KEY_MGMT_PSK_SHA256 BIT(8)
+
+static void wifi_conn_cmds(struct k_work *work)
+{
+    #define CMDBUF_LEN 128
+
+    // example cmd: "connect -s GRLPrivate -p nxp12345 -k 1"
+    char cmds[CMDBUF_LEN];
+    char *argv[64];
+    int argc = 0;
+    char *token;
+
+    // Generate the connect commands:
+
+    // ssid / pwd
+    snprintf(cmds, CMDBUF_LEN, "connect -s %s -p %s", ssid, pwd);
+
+    // mgmt:
+    // example: 0x0142
+    //	WPA_KEY_MGMT_PSK: BIT(1)
+    //  WPA_KEY_MGMT_FT_PSK BIT(6)
+    //  WPA_KEY_MGMT_PSK_SHA256 BIT(8)
+    if (key_mgmt & (WPA_KEY_MGMT_PSK|WPA_KEY_MGMT_PSK_SHA256)) {
+        strcat(cmds, " -k 1");
+    } else if (key_mgmt == 0) {
+        strcat(cmds, " -k 0");
+    }
+
+    printk("wifi_conn_cmds: cmd: [%s]\n", cmds);
+    token = strtok(cmds, " ");
+    while (token != NULL && argc < 64) {
+        argv[argc++] = token;
+        token = strtok(NULL, " ");
+    }
+    cmd_wifi_connect(NULL, argc, argv);
+}
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+const char setting_key[][10] = {
+    "ssid",
+    "pwd",
+    "key_mgmt",
+};
+
+struct read_req
+{
+    const char * key_name;  // [in] keyname
+    void *dst;       // [in]dst
+    size_t buf_size; // [in] sizeof dst;
+    int res;         // [out] result
+    size_t cfg_size; // [out] Size of the saved setting
+};
+
+static int setting_handler_cb(const char *key_name, size_t len, settings_read_cb read_cb, void *cb_arg, void *param)
+{
+    struct read_req * rreq = (struct read_req*) param;
+    uint8_t tmp_buf[128];
+    ssize_t read_len;
+
+    if (strcmp(key_name, rreq->key_name)) {
+        // Not the key we expected => return 0 to continue
+        rreq->res = -1;
+        return 0;
+    }
+    read_len = read_cb(cb_arg, tmp_buf, sizeof(tmp_buf));
+    if ((read_len > 0) && (read_len <= rreq->buf_size)) {
+        memcpy(rreq->dst, tmp_buf, read_len);
+        rreq->cfg_size =  read_len;
+        rreq->res = 0;
+
+    } else {
+        printk("==> Failed to load setting value (%d, %d) \n", read_len, rreq->buf_size);
+    }
+    // Return 1 to stop processing further keys
+    return 1;
+}
+
+static void init_read_req(struct read_req *rreq, const char * key_name, void * pbuf, size_t buf_len)
+{
+    memset(rreq, 0, sizeof(struct read_req));
+    rreq->key_name = key_name;
+    rreq->dst = pbuf;
+    rreq->buf_size = buf_len;
+}
+
+void save_setting(char *key, void * buf, size_t buf_size)
+{
+    char key_name[128] = {"dwa_settings/"};
+
+    strcat (key_name, key);
+    printk("=> keyname: [%s]\n", key_name);
+    settings_save_one(key_name, buf, buf_size);
+}
+
+void clear_setting(const char *key)
+{
+    char key_name[128] = {"dwa_settings/"};
+    int res;
+
+    strcat (key_name, key);
+    res = settings_delete(key_name);
+    printk("===> deleting key[%s], res: %d\n", key, res);
+}
+
+static int cmd_wpa_clear(const struct shell *sh,
+                          size_t argc,
+                          const char *argv[])
+{
+    ARG_UNUSED(sh);
+
+    printk("clearing keys...\n");
+    clear_setting(setting_key[0]);
+    clear_setting(setting_key[1]);
+    clear_setting(setting_key[2]);
+
+    return 0;
+}
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //#endif // CONFIG_BUILD_IN_DWA
 
@@ -4004,11 +4131,60 @@ static int wifi_shell_init(void)
 
 //#if defined(CONFIG_BUILD_IN_DWA) && (CONFIG_BUILD_IN_DWA == 1)
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        k_work_init_delayable(&my_work, wifi_dpp_cmds);
-        k_work_schedule(&my_work, K_SECONDS(2));
-// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        {
+#define DWA_SETTING_NAME	"dwa_settings"
+            int rc;
+            struct read_req rreq;
+
+            rc = settings_subsys_init();
+            if (rc) {
+                printk("=> Setting init failed: %d\n", rc);
+            }
+
+            // Load ssid
+            init_read_req(&rreq, setting_key[0], ssid, sizeof(ssid));
+            settings_load_subtree_direct(DWA_SETTING_NAME, setting_handler_cb, &rreq);
+            if (rreq.res == 0) {
+                printk("=> Read saved ssid: ok [%s]\n", ssid);
+            } else {
+                printk("=> Fail to read ssid\n");
+            }
+
+            // Load pwd
+            init_read_req(&rreq, setting_key[1], pwd, sizeof(pwd));
+            settings_load_subtree_direct(DWA_SETTING_NAME, setting_handler_cb, &rreq);
+            if (rreq.res == 0) {
+                printk("=> Read saved pwd: [%s]\n", pwd);
+            } else {
+                printk("=> Fail to read pwd\n");
+            }
+
+            // Load key_mgmt
+            init_read_req(&rreq, setting_key[2], &key_mgmt, sizeof(key_mgmt));
+            settings_load_subtree_direct(DWA_SETTING_NAME, setting_handler_cb, &rreq);
+            if (rreq.res == 0) {
+                printk("=> Read saved key_mgmt: [0x%04x]\n", key_mgmt);
+            } else {
+                printk("=> Fail to read pwd\n");
+            }
+
+            if (strlen(ssid) == 0) {
+                // No valid ssid => do DPP
+                k_work_init_delayable(&my_work, wifi_dpp_cmds);
+                k_work_schedule(&my_work, K_SECONDS(2));
+            } else {
+                // Has ap credential => connect to ap
+                k_work_init_delayable(&my_work, wifi_conn_cmds);
+                k_work_schedule(&my_work, K_SECONDS(1));
+            }
+        }
+// --------------------------------------------------------------------
 //#endif // CONFIG_BUILD_IN_DWA
 	return 0;
 }
 
 SYS_INIT(wifi_shell_init, APPLICATION, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
+SHELL_CMD_REGISTER(wpa_clear,
+                   NULL,
+                   "wpa_clear commands (only for internal use)",
+                   cmd_wpa_clear);
