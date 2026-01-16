@@ -4,6 +4,21 @@ cmake_minimum_required(VERSION 3.20.0)
 
 option(BUILD_IN_DWA "Enable DWA build variant" OFF)
 
+if(USE_DUMMY_CREDS)
+  set(creds "src/creds/dummy.c")
+else()
+  if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/creds/key.c OR
+     NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/creds/cert.c OR
+     NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/creds/ca.c)
+    message(FATAL_ERROR
+        "Credentials not found. Please run "
+        "'python3 src/creds/convert_keys.py' before building"
+    )
+  endif()
+
+  set(creds "src/creds/ca.c" "src/creds/key.c" "src/creds/cert.c")
+endif()
+
 if (BUILD_IN_DWA)
     # Provide path to the root of Matter repository
     if(DEFINED ENV{CHIP_ROOT})
@@ -132,5 +147,7 @@ else()
     project(wifi)
 
     FILE(GLOB app_sources src/*.c)
-    target_sources(app PRIVATE ${app_sources})
+    target_sources(app PRIVATE ${app_sources}  ${creds})
+	
+	target_include_directories(app PRIVATE ${ZEPHYR_BASE}/samples/net/common)
 endif()
